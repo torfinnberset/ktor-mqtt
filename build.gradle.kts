@@ -42,7 +42,12 @@ allprojects {
     plugins.withId("com.vanniktech.maven.publish.base") {
         configure<MavenPublishBaseExtension> {
             publishToMavenCentral()
-            signAllPublications()
+            // Fork builds (-PforkPublish=true) are consumed straight from a repository rather than
+            // from a registry that verifies signatures, and the upstream signing key is not
+            // available to a fork. Released builds keep signing on.
+            if (providers.gradleProperty("forkPublish").getOrElse("false") != "true") {
+                signAllPublications()
+            }
             pom {
                 name = "Ktor MQTT"
                 description = "A modern multiplatform Kotlin MQTT 5 client library."
