@@ -120,6 +120,34 @@ class BinaryPropertyByteCountTest {
     }
 
     @Test
+    fun `the binary property size holds at both ends of the permitted range`() {
+        // writeMqttByteString permits 0..65535 bytes, and the length prefix is written whatever the
+        // size -- so an empty value still occupies 3 bytes, and the largest legal one must not be
+        // mis-sized by the length prefix either.
+        assertEquals(3, publishCarrying(correlationDataOfSize = 0).publishPropertyBlock().declared)
+        assertEquals(65_538, publishCarrying(correlationDataOfSize = 65_535).publishPropertyBlock().declared)
+    }
+
+    @Test
+    fun `an empty correlation data value survives a round trip through a broker-shaped packet`() = runTest {
+        // The empty case is the one most likely to be special-cased wrongly by a size calculation,
+        // and it must still decode as *present but empty* rather than as absent.
+        val bytes = byteArrayOf(
+            0x30,                                     // PUBLISH, QoS 0
+            0x0B,                                     // remaining length: 11 = topic 5 + vbi 1 + props 3 + payload 2
+            0x00, 0x03, 'a'.code.toByte(), '/'.code.toByte(), 'b'.code.toByte(),
+            0x03,                                     // property block: 3 bytes
+            0x09, 0x00, 0x00,                         // correlation data, zero bytes long
+            'h'.code.toByte(), 'i'.code.toByte()      // payload
+        )
+
+        val publish = ByteReadChannel(bytes).readPacket() as Publish
+
+        assertEquals(CorrelationData(ByteString()), publish.correlationData)
+        assertEquals("hi".encodeToByteString(), publish.payload)
+    }
+
+    @Test
     fun `property block length prefix rolls over at 128 bytes`() {
         // A variable byte integer needs a second byte from 128 onwards, so a property block that is
         // mis-sized by two near the boundary also picks the wrong number of length bytes.
