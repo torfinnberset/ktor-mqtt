@@ -17,6 +17,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.*
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.ExperimentalTime
 
 @OptIn(ExperimentalTime::class)
@@ -391,6 +392,32 @@ class MqttClientTest {
         verify { session.store(inFlightPublish.source) }
         verify { session.replace(inFlightPublish) }
         verify { session.acknowledge(inFlightPubrel) }
+    }
+
+    @Test
+    fun `a publish that is never acknowledged returns its send quota permit`() = runTest(timeout = 5.seconds) {
+        val connack = Connack(isSessionPresent = false, reason = Success, receiveMaximum = ReceiveMaximum(1u))
+        everySuspend { engine.start() } returns Result.success(Unit)
+        everySuspend { engine.send(ofType<Connect>()) } calls {
+            packetResults.emit(Result.success(connack))
+            Result.success(Unit)
+        }
+        everySuspend { engine.send(ofType<Publish>()) } returns Result.success(Unit) // Never acknowledged
+        every { session.store(any()) } calls { (publish: Publish) ->
+            InFlightPublish(publish, Clock.System.now(), 1)
+        }
+        connectionState.emit(true)
+
+        val client = createClient(engine)
+        assertTrue(client.connect().isSuccess)
+
+        val first = client.publish(PublishRequest("test/topic") { desiredQoS = QoS.AT_LEAST_ONCE })
+        assertIs<HandshakeFailedException>(first.exceptionOrNull())
+
+        // With a receive maximum of 1, the timed out message above must have returned its quota permit,
+        // otherwise this second publish waits for the permit forever
+        val second = client.publish(PublishRequest("test/topic") { desiredQoS = QoS.AT_LEAST_ONCE })
+        assertIs<HandshakeFailedException>(second.exceptionOrNull())
     }
 
     @Test
