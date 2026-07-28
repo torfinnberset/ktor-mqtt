@@ -364,6 +364,7 @@ public class MqttClient internal constructor(
         val puback = awaitResponseOf<Puback>({ it.isResponseFor<Puback>(publish) }) {
             engine.send(publish)
         }.getOrElse {
+            releaseSendQuotaSafe() // No PUBACK will arrive to return the quota permit of this message
             it.throwHandshakeExceptionForTimeout("PUBACK", publish)
         }
 
@@ -378,6 +379,7 @@ public class MqttClient internal constructor(
         awaitResponseOf<Pubrec>({ it.isResponseFor<Pubrec>(publish) }) {
             engine.send(publish)
         }.getOrElse {
+            releaseSendQuotaSafe() // No PUBREC will arrive to return the quota permit of this message
             it.throwHandshakeExceptionForTimeout("PUBREC", publish)
         }
 
@@ -385,6 +387,7 @@ public class MqttClient internal constructor(
         val pubcomp = awaitResponseOf<Pubcomp>({ it.isResponseFor<Pubcomp>(pubrel.source) }) {
             engine.send(pubrel.source)
         }.getOrElse {
+            releaseSendQuotaSafe() // No PUBCOMP will arrive to return the quota permit of this message
             it.throwHandshakeExceptionForTimeout("PUBCOMP", publish)
         }
 
