@@ -449,6 +449,37 @@ class MqttClientTest {
     }
 
     @Test
+    fun `resent publishes of a resumed session carry the DUP flag`() = runTest {
+        val original = Publish(
+            qoS = QoS.AT_LEAST_ONCE,
+            packetIdentifier = 1u,
+            topic = "test/topic".toTopic(),
+            payload = "resend me".encodeToByteString()
+        )
+        every { session.unacknowledgedPackets() } returns listOf(InFlightPublish(original, Clock.System.now(), 1))
+        every { session.acknowledge(any()) } returns Unit
+
+        var resent: Publish? = null
+        everySuspend { engine.start() } returns Result.success(Unit)
+        everySuspend { engine.send(ofType<Connect>()) } calls {
+            packetResults.emit(Result.success(Connack(isSessionPresent = true, reason = Success)))
+            Result.success(Unit)
+        }
+        everySuspend { engine.send(ofType<Publish>()) } calls { (publish: Publish) ->
+            resent = publish
+            packetResults.emit(Result.success(Puback(1u, Success)))
+            Result.success(Unit)
+        }
+        connectionState.emit(true)
+
+        val client = createClient(engine)
+        assertTrue(client.connect().isSuccess)
+
+        assertNotNull(resent, "The unacknowledged PUBLISH must be resent when the session is resumed")
+        assertTrue(resent.isDupMessage, "A re-delivered PUBLISH must have the DUP flag set [MQTT-3.3.1-1]")
+    }
+
+    @Test
     fun `when the server does not support retained messages the retained flag is cleared`() = runTest {
         val connack = Connack(
             isSessionPresent = false,
