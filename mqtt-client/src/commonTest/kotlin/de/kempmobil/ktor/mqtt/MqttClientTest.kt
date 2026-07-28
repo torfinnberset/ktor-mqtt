@@ -9,6 +9,7 @@ import dev.mokkery.matcher.any
 import dev.mokkery.matcher.ofType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
+import kotlinx.io.bytestring.encodeToByteString
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -391,6 +392,37 @@ class MqttClientTest {
         verify { session.store(inFlightPublish.source) }
         verify { session.replace(inFlightPublish) }
         verify { session.acknowledge(inFlightPubrel) }
+    }
+
+    @Test
+    fun `resent publishes of a resumed session carry the DUP flag`() = runTest {
+        val original = Publish(
+            qoS = QoS.AT_LEAST_ONCE,
+            packetIdentifier = 1u,
+            topic = "test/topic".toTopic(),
+            payload = "resend me".encodeToByteString()
+        )
+        every { session.unacknowledgedPackets() } returns listOf(InFlightPublish(original, Clock.System.now(), 1))
+        every { session.acknowledge(any()) } returns Unit
+
+        var resent: Publish? = null
+        everySuspend { engine.start() } returns Result.success(Unit)
+        everySuspend { engine.send(ofType<Connect>()) } calls {
+            packetResults.emit(Result.success(Connack(isSessionPresent = true, reason = Success)))
+            Result.success(Unit)
+        }
+        everySuspend { engine.send(ofType<Publish>()) } calls { (publish: Publish) ->
+            resent = publish
+            packetResults.emit(Result.success(Puback(1u, Success)))
+            Result.success(Unit)
+        }
+        connectionState.emit(true)
+
+        val client = createClient(engine)
+        assertTrue(client.connect().isSuccess)
+
+        assertNotNull(resent, "The unacknowledged PUBLISH must be resent when the session is resumed")
+        assertTrue(resent.isDupMessage, "A re-delivered PUBLISH must have the DUP flag set [MQTT-3.3.1-1]")
     }
 
     @Test
